@@ -1,0 +1,35 @@
+# Core
+numpy
+pandas
+matplotlib
+seaborn
+jupyter
+ipykernel
+
+# RL
+gymnasium
+stable-baselines3[extra]
+torch
+torchvision
+torchaudio
+
+# Data
+requests
+yfinance
+ccxt
+pyarrow
+fastparquet
+
+# NLP
+transformers
+datasets
+vaderSentiment
+textblob
+
+# Visualization
+plotly
+mplfinance
+
+# Experiment tracking (optional)
+wandb
+tensorboard

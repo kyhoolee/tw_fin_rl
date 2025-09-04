@@ -1,0 +1,110 @@
+# -----------------------
+# Python
+# -----------------------
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+.ipynb_checkpoints/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+.junit/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_convert
+
+# Logs & debug
+*.log
+logs/
+debug/
+.DS_Store
+
+# MyPy / Pyre / Pylint
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pylint.d/
+
+# VSCode / PyCharm
+.vscode/
+.idea/
+
+# -----------------------
+# Project specific
+# -----------------------
+# Data files
+work/data
+*.csv
+*.csv.gz
+*.parquet
+*.h5
+*.npz
+*.npy
+
+# Outputs
+outputs/
+checkpoints/
+experiments/
+wandb/
+mlruns/
+tensorboard/
+
+# Cache
+__cache__/
+.cache/
+tmp/
+temp/
+
+# Configs (local)
+*.local.yaml
+*.secrets.json
+
+# -----------------------
+# OS files
+# -----------------------
+Thumbs.db
+.DS_Store
