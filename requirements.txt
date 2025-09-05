@@ -33,3 +33,9 @@ mplfinance
 # Experiment tracking (optional)
 wandb
 tensorboard
+
+
+pytrends 
+tqdm 
+pyarrow 
+python-dateutil
