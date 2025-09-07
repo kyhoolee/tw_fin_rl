@@ -70,3 +70,45 @@ python -m fin_rl.data.crypto.gdelt_demo \
 
 
 
+python -m fin_rl.data.crypto.gdelt_hardfix \
+  --out ./work/data/gdelt_fast_hardfix \
+  --langs english \
+  --window 09:00-12:00 \
+  --sleep-sec 1.0
+
+nohup python -u -m fin_rl.data.crypto.gdelt_hardfix \
+  --out ./work/data/gdelt_fast_hardfix \
+  --langs english \
+  --window 09:00-12:00 \
+  --sleep-sec 1.0 \
+  > gdelt_hardfix.log 2>&1 &
+
+
+nohup python -m fin_rl.data.crypto.gdelt_hardfix \
+  --start 2024-01-01 --end 2024-01-10 \
+  --window 09:00-12:00 \
+  --langs english \
+  --sleep-sec 1.0 \
+  --verbose \
+  --debug-dump-dir ./work/data/gdelt_fast_hardfix/_debug_raw \
+  --out ./work/data/gdelt_fast_hardfix \
+  > gdelt_hardfix.log 2>&1 &
+
+
+  First date : 2020-08-11
+  Last date  : 2025-09-04
+
+nohup python -m fin_rl.data.crypto.gdelt_hardfix \
+  --start 2020-08-11 --end 2025-09-04 \
+  --window 09:00-12:00 \
+  --langs english \
+  --sleep-sec 0.5 \
+  --sleep-between-req 0.5 \
+  --verbose \
+  --out ./work/data/gdelt_full_hardfix_split \
+  > gdelt_full_split.log 2>&1 &
+
+python -m fin_rl.data.crypto.gdelt_check --base-dir ./work/data/gdelt_fast_hardfix_split --show-samples 5
+
+
+
