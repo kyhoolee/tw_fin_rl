@@ -112,3 +112,35 @@ python -m fin_rl.data.crypto.gdelt_check --base-dir ./work/data/gdelt_fast_hardf
 
 
 
+nohup python -m fin_rl.data.crypto.gdelt_hardfix \
+  --start 2020-08-11 --end 2025-09-04 \
+  --window 09:00-21:00 \
+  --langs english \
+  --sleep-sec 0.5 \
+  --sleep-between-req 0.5 \
+  --verbose \
+  --out ./work/data/gdelt_0921_hardfix_split \
+  > gdelt_0921_split.log 2>&1 &
+
+
+
+nohup python -m fin_rl.data.crypto.gdelt_hardfix \
+  --start 2025-09-01 --end 2025-09-04 \
+  --window 06:00-23:00 \
+  --langs english \
+  --sleep-sec 0.5 \
+  --sleep-between-req 0.5 \
+  --verbose \
+  --out ./work/data/gdelt_debug_hardfix_split \
+  > gdelt_debug_split.log 2>&1 &
+
+
+nohup python -m fin_rl.data.crypto.gdelt_hardfix \
+  --start 2020-08-11 --end 2025-09-04 \
+  --window 00:00-23:59 \
+  --langs english \
+  --sleep-sec 0.5 \
+  --sleep-between-req 0.5 \
+  --verbose \
+  --out ./work/data/gdelt_0024_hardfix_split \
+  > gdelt_0024_split.log 2>&1 &

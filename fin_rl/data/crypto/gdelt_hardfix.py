@@ -102,8 +102,8 @@ def _build_balanced_clause(symbol: str) -> str:
     s = symbol.upper()
     if s == "BTC": return '"Bitcoin" OR "BTC token" OR "BTC price"'
     if s == "ETH": return '"Ethereum" OR "ETH token" OR "ETH price"'
-    if s == "BNB": return '"BNB Chain" OR "BNB token" OR "BNB price" OR "Binance"'
-    if s == "SOL": return '"Solana" OR "SOL token" OR "SOL price"'
+    if s == "BNB": return '"BNB chain" OR "BNB token" OR "BNB price"'
+    if s == "SOL": return '"Solana chain" OR "Solana token" OR "Solana price" OR "SOL token" OR "SOL price"'
     return s
 
 def _build_strict_clause(symbol: str) -> str:
