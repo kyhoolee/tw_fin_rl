@@ -144,3 +144,11 @@ nohup python -m fin_rl.data.crypto.gdelt_hardfix \
   --verbose \
   --out ./work/data/gdelt_0024_hardfix_split \
   > gdelt_0024_split.log 2>&1 &
+
+
+## Normalize DATA 
+
+python -m fin_rl.data.crypto.gdelt_normalize_data \
+  --input /home/kylh/phd/tw_fin_rl/work/data/gdelt_0024_hardfix_split/filtered/gdelt_filtered_merged_2020-08-11_2025-09-03.parquet \
+  --out-dir /home/kylh/phd/tw_fin_rl/work/data/gdelt_0024_hardfix_split/normalized_unique \
+  --priority-tokens BTC,ETH,BNB,SOL 
