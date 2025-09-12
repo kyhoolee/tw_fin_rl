@@ -8,14 +8,30 @@ Assumptions:
 - Signals at t are computed using data up to t-1.
 - Execution occurs at close[t].
 - Fees model: Binance taker per-side fee (default 7.5 bps = 0.075%).
+- This version adds verbose progress logging and faster rolling via NumPy.
+
+Usage (unchanged public API):
+    syms, out, metrics = run_all_baselines(split_parquet_path, fee_bps=7.5, slippage_bps=0.0)
+
+Extras (optional):
+    run_all_baselines(..., verbose=True, progress_every=10000)
 """
+from __future__ import annotations
+
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from typing import Tuple, Dict, Any, List, Optional
+
+# try tqdm for pretty progress if available
+try:
+    from tqdm import trange
+except Exception:  # pragma: no cover
+    trange = None
 
 # ---------- Loader ----------
 
-def load_tensor(split_path, cols=("Open","High","Low","Close","Volume")):
+def load_tensor(split_path, cols=("Open","High","Low","Close","Volume")) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
     df = pd.read_parquet(split_path)
     N = df["symbol"].nunique()
     assert df["open_time"].nunique() * N == len(df), "Split is not per-timestamp synchronized"
@@ -32,12 +48,12 @@ def load_tensor(split_path, cols=("Open","High","Low","Close","Volume")):
 def safe_div(a, b, eps=1e-12):
     return a / (b + eps)
 
-def price_to_ret(close):
+def price_to_ret(close: np.ndarray) -> np.ndarray:
     r = np.zeros_like(close, dtype=np.float64)
     r[1:] = safe_div(close[1:], close[:-1]) - 1.0
     return r
 
-def apply_txn_costs(weight_prev, weight_new, fee_bps=7.5, slippage_bps=0.0):
+def apply_txn_costs(weight_prev: np.ndarray, weight_new: np.ndarray, fee_bps=7.5, slippage_bps=0.0) -> float:
     """
     Binance-style per-side fee model.
     - delta L1 = sum |w_new - w_prev| (buys + sells as fraction of NAV)
@@ -50,7 +66,7 @@ def apply_txn_costs(weight_prev, weight_new, fee_bps=7.5, slippage_bps=0.0):
 
 # ---------- Metrics ----------
 
-def perf_metrics(nav, dt_index=None):
+def perf_metrics(nav, dt_index=None) -> Dict[str, float]:
     nav = np.asarray(nav, dtype=np.float64)
     rets = np.diff(nav) / (nav[:-1] + 1e-12)
     if dt_index is None:
@@ -64,17 +80,28 @@ def perf_metrics(nav, dt_index=None):
     sharpe = mean / std * np.sqrt(ann)
     cagr = nav[-1] - 1.0
     dd = 1.0 - safe_div(nav, np.maximum.accumulate(nav))
-    maxdd = dd.max()
-    return {"CAGR≈": float(cagr), "Sharpe≈": float(sharpe), "MaxDD": float(maxdd)}
+    maxdd = float(dd.max())
+    return {"CAGR≈": float(cagr), "Sharpe≈": float(sharpe), "MaxDD": maxdd}
 
 # ---------- Baselines ----------
 
-def ew_baseline(close, fee_bps=7.5, rebalance_every=1440, slippage_bps=0.0):
+def ew_baseline(close: np.ndarray, fee_bps=7.5, rebalance_every=1440, slippage_bps=0.0,
+                verbose: bool=False, progress_every: int=10000) -> np.ndarray:
+    """
+    Equal-weight portfolio with periodic rebalance.
+    """
     T, N = close.shape
     nav = np.ones(T, dtype=np.float64)
     w_prev = np.ones(N) / N
     last_rb = 0
-    for t in range(1, T):
+
+    it = range(1, T)
+    if verbose and trange is not None:
+        it = trange(1, T, desc="EW_daily", miniters=max(1, progress_every))
+    for t in it:
+        if verbose and trange is None and (t % progress_every == 0):
+            print(f"[EW] t={t}/{T} nav={nav[t-1]:.6f}")
+
         if (t - last_rb) % rebalance_every == 0:
             w_tgt = np.ones(N) / N
             cost = apply_txn_costs(w_prev, w_tgt, fee_bps, slippage_bps)
@@ -85,11 +112,22 @@ def ew_baseline(close, fee_bps=7.5, rebalance_every=1440, slippage_bps=0.0):
         nav[t] = nav[t-1] * (1.0 + (w_prev * r_t).sum())
     return nav
 
-def momentum_topk(close, lookback=360, topk=2, fee_bps=7.5, rebalance_every=60, slippage_bps=0.0):
+def momentum_topk(close: np.ndarray, lookback=360, topk=2, fee_bps=7.5, rebalance_every=60,
+                  slippage_bps=0.0, verbose: bool=False, progress_every: int=10000) -> np.ndarray:
+    """
+    Cross-sectional momentum: equal-weight top-k by trailing return.
+    """
     T, N = close.shape
     nav = np.ones(T, dtype=np.float64)
     w_prev = np.zeros(N, dtype=np.float64)
-    for t in range(1, T):
+
+    it = range(1, T)
+    if verbose and trange is not None:
+        it = trange(1, T, desc="MOM_top2_look360_rb60", miniters=max(1, progress_every))
+    for t in it:
+        if verbose and trange is None and (t % progress_every == 0):
+            print(f"[MOM] t={t}/{T} nav={nav[t-1]:.6f}")
+
         if (t % rebalance_every == 0) and (t - 1 - lookback >= 0):
             past = safe_div(close[t-1], close[t-1-lookback])
             ranks = np.argsort(-past)
@@ -103,32 +141,65 @@ def momentum_topk(close, lookback=360, topk=2, fee_bps=7.5, rebalance_every=60, 
         nav[t] = nav[t-1] * (1.0 + (w_prev * r_t).sum())
     return nav
 
-def pair_meanrev_spread(close, pair=(0,1), z_window=180, entry_z=1.5, exit_z=0.5,
-                        fee_bps=7.5, slippage_bps=0.0, max_gross=1.0):
+def _rolling_last_mean_std(arr: np.ndarray, window: int) -> Tuple[float, float]:
+    """
+    Compute mean/std of the *last* window slice quickly using NumPy.
+    Assumes len(arr) >= window, returns (mean, std_ddof0).
+    """
+    win = arr[-window:]
+    m = float(win.mean())
+    # ddof=0 for population-like use (consistent with original code)
+    v = float(win.std(ddof=0))
+    # guard against near-zero
+    return m, (v + 1e-12)
+
+def pair_meanrev_spread(close: np.ndarray, pair=(0,1), z_window=180, entry_z=1.5, exit_z=0.5,
+                        fee_bps=7.5, slippage_bps=0.0, max_gross=1.0,
+                        verbose: bool=False, progress_every: int=10000) -> np.ndarray:
+    """
+    Simple pair mean-reversion on log-price spread(i - j).
+    Positions are +/- max_gross/2 per leg (delta-neutral) when |z| > entry;
+    flatten when |z| < exit. Signals at t use data up to t-1; execute at close[t].
+    """
     i, j = pair
     logp = np.log(close)
     T = close.shape[0]
     nav = np.ones(T, dtype=np.float64)
     pos_i = 0.0; pos_j = 0.0
-    for t in range(1, T):
+
+    it = range(1, T)
+    if verbose and trange is not None:
+        it = trange(1, T, desc="PAIR_MR_BTC_ETH", miniters=max(1, progress_every))
+    for t in it:
+        if verbose and trange is None and (t % progress_every == 0):
+            print(f"[PAIR] t={t}/{T} nav={nav[t-1]:.6f} pos=({pos_i:.2f},{pos_j:.2f})")
+
         if t - z_window >= 1:
-            s = logp[:t, i] - logp[:t, j]  # up to t-1
-            m = pd.Series(s).rolling(z_window, min_periods=z_window).mean().iloc[-1]
-            v = pd.Series(s).rolling(z_window, min_periods=z_window).std(ddof=0).iloc[-1] + 1e-12
-            z = (s[-1] - m) / v
+            # spread up to t-1
+            s = logp[:t, i] - logp[:t, j]
+            # fast last-window stats
+            m, std = _rolling_last_mean_std(s, z_window)
+            z = (s[-1] - m) / std
+
             w_i_new = w_j_new = 0.0
-            if abs(z) > entry_z:
+            az = abs(z)
+            if az > entry_z:
                 if z > 0:  # i rich vs j → short i, long j
                     w_i_new, w_j_new = -max_gross/2, +max_gross/2
                 else:
                     w_i_new, w_j_new = +max_gross/2, -max_gross/2
-            elif abs(z) < exit_z:
+            elif az < exit_z:
                 w_i_new = w_j_new = 0.0
             else:
                 w_i_new, w_j_new = pos_i, pos_j
-            cost = apply_txn_costs(np.array([pos_i, pos_j]), np.array([w_i_new, w_j_new]), fee_bps, slippage_bps)
+
+            cost = apply_txn_costs(np.array([pos_i, pos_j]),
+                                   np.array([w_i_new, w_j_new]),
+                                   fee_bps, slippage_bps)
             nav[t-1] *= (1 - cost)
             pos_i, pos_j = w_i_new, w_j_new
+
+        # evolve NAV
         r_i = close[t, i] / close[t-1, i] - 1.0
         r_j = close[t, j] / close[t-1, j] - 1.0
         nav[t] = nav[t-1] * (1.0 + pos_i * r_i + pos_j * r_j)
@@ -136,13 +207,50 @@ def pair_meanrev_spread(close, pair=(0,1), z_window=180, entry_z=1.5, exit_z=0.5
 
 # ---------- Convenience ----------
 
-def run_all_baselines(split_parquet_path, fee_bps=7.5, slippage_bps=0.0):
+def run_all_baselines(split_parquet_path: str, fee_bps=7.5, slippage_bps=0.0,
+                      verbose: bool=False, progress_every: int=10000) -> Tuple[List[str], Dict[str, np.ndarray], Dict[str, Dict[str, float]]]:
+    """
+    Load Close tensor from split parquet, run a small family of baselines, and return:
+        symbols, {name -> NAV curve}, {name -> metrics dict}
+    """
+    if verbose:
+        print(f"[run_all_baselines] split={split_parquet_path}")
+        print(f"[run_all_baselines] fees: fee_bps={fee_bps}, slippage_bps={slip_bps if 'slip_bps' in locals() else 0.0}")
+
     x, ts, syms, feats = load_tensor(split_parquet_path, cols=("Close",))
     close = x[:, :, 0].astype(np.float64)
-    out = {}
-    out["EW_daily"] = ew_baseline(close, fee_bps=fee_bps, rebalance_every=1440, slippage_bps=slippage_bps)
-    out["MOM_top2_look360_rb60"] = momentum_topk(close, lookback=360, topk=2, fee_bps=fee_bps, rebalance_every=60, slippage_bps=slippage_bps)
-    out["PAIR_MR_BTC_ETH"] = pair_meanrev_spread(close, pair=(syms.index("BTCUSDT"), syms.index("ETHUSDT")),
-                                                 z_window=180, entry_z=1.5, exit_z=0.5, fee_bps=fee_bps, slippage_bps=slippage_bps, max_gross=1.0)
+
+    out: Dict[str, np.ndarray] = {}
+
+    if verbose: print(">> running EW_daily ...")
+    out["EW_daily"] = ew_baseline(
+        close, fee_bps=fee_bps, rebalance_every=1440, slippage_bps=slippage_bps,
+        verbose=verbose, progress_every=progress_every
+    )
+
+    if verbose: print(">> running MOM_top2_look360_rb60 ...")
+    out["MOM_top2_look360_rb60"] = momentum_topk(
+        close, lookback=360, topk=2, fee_bps=fee_bps, rebalance_every=60, slippage_bps=slippage_bps,
+        verbose=verbose, progress_every=progress_every
+    )
+
+    # Guard for symbol names (BTCUSDT & ETHUSDT may not exist in exotic bundles)
+    pair_name = "PAIR_MR_BTC_ETH"
+    if "BTCUSDT" in syms and "ETHUSDT" in syms:
+        pair = (syms.index("BTCUSDT"), syms.index("ETHUSDT"))
+    else:
+        # fallback to first two symbols
+        pair = (0, 1)
+        pair_name = f"PAIR_MR_{syms[pair[0]]}_{syms[pair[1]]}"
+        if verbose:
+            print(f">> [warn] default pair BTC/ETH not found. Using ({syms[pair[0]]}, {syms[pair[1]]})")
+
+    if verbose: print(f">> running {pair_name} ...")
+    out[pair_name] = pair_meanrev_spread(
+        close, pair=pair, z_window=180, entry_z=1.5, exit_z=0.5,
+        fee_bps=fee_bps, slippage_bps=slippage_bps, max_gross=1.0,
+        verbose=verbose, progress_every=progress_every
+    )
+
     metrics = {k: perf_metrics(nav, dt_index=ts) for k, nav in out.items()}
     return syms, out, metrics
