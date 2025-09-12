@@ -217,8 +217,10 @@ def run_all_baselines(split_parquet_path: str, fee_bps=7.5, slippage_bps=0.0,
         print(f"[run_all_baselines] split={split_parquet_path}")
         print(f"[run_all_baselines] fees: fee_bps={fee_bps}, slippage_bps={slip_bps if 'slip_bps' in locals() else 0.0}")
 
+    print(">> loading data ...")
     x, ts, syms, feats = load_tensor(split_parquet_path, cols=("Close",))
     close = x[:, :, 0].astype(np.float64)
+    print(">> data loaded: T,N,F =", x.shape)
 
     out: Dict[str, np.ndarray] = {}
 

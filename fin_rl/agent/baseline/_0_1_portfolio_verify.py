@@ -26,14 +26,23 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
+    print("== Running core baselines ==")
+
     fee_bps, slip_bps = load_fee_cfg(args.fee_cfg, args.fee_name)
     out_dir = Path(args.out); out_dir.mkdir(parents=True, exist_ok=True)
 
-    # core
-    syms, curves_core, metrics_core = run_core(args.split, fee_bps=fee_bps, slippage_bps=slip_bps)
-    # ext
-    syms2, ts, curves_ext = run_ext_baselines(args.split, fee_bps=fee_bps, slippage_bps=slip_bps)
+    print(f"[main] out_dir: {out_dir}")
+    print(f"[main] fee_bps={fee_bps}, slippage_bps={slip_bps}")
 
+    # core
+    print("== Running core baselines ==")
+    syms, curves_core, metrics_core = run_core(args.split, fee_bps=fee_bps, slippage_bps=slip_bps)
+    print("== Core baselines done ==")
+    
+    # ext
+    print("== Running extended baselines ==")
+    syms2, ts, curves_ext = run_ext_baselines(args.split, fee_bps=fee_bps, slippage_bps=slip_bps)
+    print("== Extended baselines done ==")
     # merge curves
     curves = {**curves_core, **curves_ext}
     df_curves = pd.DataFrame({k: v for k, v in curves.items()}, index=pd.to_datetime(ts))

@@ -229,8 +229,11 @@ def run_ext_baselines(split_parquet_path: str, fee_bps=7.5, slippage_bps=0.0,
         print(f"[run_ext_baselines] split={split_parquet_path}")
         print(f"[run_ext_baselines] fees: fee_bps={fee_bps}, slippage_bps={slippage_bps}")
 
+    print(">> loading data ...")
     close, ts, syms = load_close_tensor(split_parquet_path)
     out: Dict[str, np.ndarray] = {}
+
+    print("== Running extended baselines ==")
 
     if verbose: print(">> running EW_VolTarget_hl1440 ...")
     out["EW_VolTarget_hl1440"] = ew_vol_target(
