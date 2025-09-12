@@ -1,0 +1,21 @@
+default: binance_taker_0075
+
+presets:
+  binance_taker_0075:
+    fee_bps: 7.5        # 0.075% per side (taker)
+    slippage_bps: 0.0
+  binance_taker_0050:
+    fee_bps: 5.0        # optimistic (VIP/BNB discounts)
+    slippage_bps: 0.0
+  maker_like_0020:
+    fee_bps: 2.0        # maker-like low fee
+    slippage_bps: 0.0
+  low_fee_0010:
+    fee_bps: 1.0
+    slippage_bps: 0.0
+  conservative_slip:
+    fee_bps: 7.5
+    slippage_bps: 3.0   # add slippage penalty
+
+heuristics:
+  rebalance_sweep_bars: [60, 120, 240, 720, 1440]

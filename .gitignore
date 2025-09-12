@@ -77,8 +77,7 @@ dmypy.json
 # Project specific
 # -----------------------
 # Data files
-work/data
-
+work
 notebook/exp/_out
 
 

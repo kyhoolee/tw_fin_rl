@@ -24,9 +24,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 import pandas as pd
 
-# ---- import user's candle_io.py ----
-sys.path.append(".")
-import candle_io  # exposes load_symbol_csv
+from ..io import candle_io  # exposes load_symbol_csv
 
 # -------------------------------------------------------
 # Utilities
