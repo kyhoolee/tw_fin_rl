@@ -208,14 +208,14 @@ def pair_meanrev_spread(close: np.ndarray, pair=(0,1), z_window=180, entry_z=1.5
 # ---------- Convenience ----------
 
 def run_all_baselines(split_parquet_path: str, fee_bps=7.5, slippage_bps=0.0,
-                      verbose: bool=False, progress_every: int=10000) -> Tuple[List[str], Dict[str, np.ndarray], Dict[str, Dict[str, float]]]:
+                      verbose: bool=True, progress_every: int=10000) -> Tuple[List[str], Dict[str, np.ndarray], Dict[str, Dict[str, float]]]:
     """
     Load Close tensor from split parquet, run a small family of baselines, and return:
         symbols, {name -> NAV curve}, {name -> metrics dict}
     """
     if verbose:
         print(f"[run_all_baselines] split={split_parquet_path}")
-        print(f"[run_all_baselines] fees: fee_bps={fee_bps}, slippage_bps={slip_bps if 'slip_bps' in locals() else 0.0}")
+        print(f"[run_all_baselines] fees: fee_bps={fee_bps}, slippage_bps={slippage_bps if 'slippage_bps' in locals() else 0.0}")
 
     print(">> loading data ...")
     x, ts, syms, feats = load_tensor(split_parquet_path, cols=("Close",))

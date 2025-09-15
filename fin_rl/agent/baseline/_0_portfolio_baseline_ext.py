@@ -221,7 +221,7 @@ def momentum_topk_turnover_capped(close: np.ndarray, lookback=360, topk=2, fee_b
 # --------- Batch runner ---------
 
 def run_ext_baselines(split_parquet_path: str, fee_bps=7.5, slippage_bps=0.0,
-                      verbose: bool=False, progress_every: int=10000) -> Tuple[List[str], np.ndarray, Dict[str, np.ndarray]]:
+                      verbose: bool=True, progress_every: int=10000) -> Tuple[List[str], np.ndarray, Dict[str, np.ndarray]]:
     """
     Run all 'ext' baselines and return (symbols, timestamps, curves_dict).
     """
