@@ -21,7 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from typing import Tuple, Dict, Any, List, Optional
+from typing import Tuple, Dict, Any, List, Optional, Sequence
 
 # try tqdm for pretty progress if available
 try:
@@ -31,17 +31,118 @@ except Exception:  # pragma: no cover
 
 # ---------- Loader ----------
 
-def load_tensor(split_path, cols=("Open","High","Low","Close","Volume")) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
+def load_tensor_safe(
+    split_path: str,
+    features: Sequence[str] = ("Open","High","Low","Close","Volume"),
+    dtype=np.float32,
+    strict: bool = True,          # True: yêu cầu đồng bộ tuyệt đối (không NaN)
+    return_mask: bool = False,    # True: trả thêm mask (True = hợp lệ)
+) -> Tuple[np.ndarray, np.ndarray, List[str], List[str], Optional[np.ndarray]]:
+    """
+    Đọc parquet OHLCV → pivot → xếp block theo symbol rồi feature → tensor (T, N, F)
+    - Không dùng reshape dựa vào thứ tự cột phẳng (tránh lệch âm thầm).
+    - Có kiểm tra strict đồng bộ (timestamp × symbol).
+    - Có mask khi cho phép thiếu (strict=False).
+
+    Returns:
+      x:        (T, N, F) ndarray
+      times:    (T,) mảng datetime (python datetime)
+      symbols:  list[str] độ dài N
+      feats:    list[str] độ dài F
+      mask:     (T, N, F) bool, True = non-NaN (nếu return_mask=True) else None
+    """
+    # 1) Đọc parquet
     df = pd.read_parquet(split_path)
-    N = df["symbol"].nunique()
-    assert df["open_time"].nunique() * N == len(df), "Split is not per-timestamp synchronized"
-    piv = df.pivot(index="open_time", columns="symbol", values=list(cols)).sort_index()
-    symbols = sorted(df["symbol"].unique())
-    features = list(cols)
-    piv = piv.reindex(sorted(piv.columns, key=lambda c: (c[1], c[0])), axis=1)
-    T, N, F = len(piv), len(symbols), len(features)
-    x = piv.to_numpy().reshape(T, N, F).astype(np.float32)
-    return x, piv.index.to_pydatetime(), symbols, features
+    # Yêu cầu cột bắt buộc
+    required_cols = {"open_time", "symbol", *features}
+    missing_cols = required_cols.difference(df.columns)
+    assert not missing_cols, f"Thiếu cột bắt buộc: {sorted(missing_cols)}"
+    # Sắp theo time/symbol để có trật tự ổn định
+    df = df.sort_values(["open_time", "symbol"]).reset_index(drop=True)
+
+    print(f"[load_tensor_safe] Loaded {df.shape} from {split_path}")
+
+    # 2) Danh sách symbol & feature ổn định
+    symbols: List[str] = sorted(df["symbol"].unique())  # N symbols (sorted)
+    feats: List[str] = list(features)                    # F features (giữ nguyên thứ tự đầu vào)
+    N = len(symbols)
+    F = len(feats)
+    assert N > 0 and F > 0, "Số symbol/feature phải > 0"
+
+    print(f"[load_tensor_safe] N={N} symbols, F={F} features, strict={strict}, return_mask={return_mask}")
+
+    # 3) Kiểm tra đồng bộ (strict)
+    T_unique = df["open_time"].nunique()
+    if strict:
+        # Mọi timestamp phải có đủ N symbol
+        assert T_unique * N == len(df), (
+            "Split is not per-timestamp synchronized. "
+            "Dùng strict=False để chấp nhận thiếu và tạo mask."
+        )
+
+    # 4) Pivot: index = open_time (T), columns = (feature, symbol)
+    #    Kết quả là DataFrame 2D với MultiIndex cột (level 0: feature, level 1: symbol).
+    piv = df.pivot(index="open_time", columns="symbol", values=feats).sort_index()
+    # Kiểm tra trục thời gian
+    T = len(piv.index)
+    assert T == T_unique, "Số timestamp sau pivot phải bằng số open_time duy nhất"
+
+    # 5) Kiểm tra symbol trong pivot (strict) hoặc ghi nhận thiếu
+    syms_in_piv = set(piv.columns.levels[1]) if isinstance(piv.columns, pd.MultiIndex) else set()
+    missing_syms = [s for s in symbols if s not in syms_in_piv]
+    if strict:
+        assert not missing_syms, f"Thiếu symbol trong pivot (strict=True): {missing_syms}"
+
+    # 6) Tạo block theo symbol → mỗi block shape (T, F)
+    #    - Chọn sub DataFrame cho 1 symbol: (T, F)
+    #    - Reindex theo feats để đảm bảo thứ tự cột đúng (feature dimension).
+    #    - Nếu symbol vắng, tạo (T, F) toàn NaN.
+    blocks: List[np.ndarray] = []  # sẽ có N phần tử, mỗi phần tử (T, F)
+    for sym in symbols:
+        if sym in syms_in_piv:
+            # sub: DataFrame (T, F)
+            sub = piv.xs(sym, level=1, axis=1)
+            # Đảm bảo đúng thứ tự feature; cột thiếu => NaN
+            sub = sub.reindex(columns=feats)
+        else:
+            # Symbol vắng hoàn toàn: tạo DataFrame NaN (T, F)
+            sub = pd.DataFrame(index=piv.index, columns=feats, dtype=float)
+        # arr: ndarray (T, F) — T = số timestamp, F = số feature
+        arr = sub.to_numpy()
+        # Kiểm tra shape từng block
+        assert arr.shape == (T, F), f"Block cho {sym} phải có shape (T, F), nhận {arr.shape}"
+        blocks.append(arr)
+
+    # Kiểm tra tổng số block
+    assert len(blocks) == N, f"Số block phải bằng số symbol N={N}, nhận {len(blocks)}"
+    print(f"[load_tensor_safe] Data blocks ready: {[(b.shape) for b in blocks]}")
+
+    # 7) Stack theo trục symbol (axis=1) → (T, N, F)
+    #   - axis=0: thời gian T (giữ nguyên)
+    #   - axis=1: symbol N (block index)
+    #   - axis=2: feature F
+    x = np.stack(blocks, axis=1).astype(dtype)
+    assert x.shape == (T, N, F), f"x phải có shape (T, N, F) = {(T, N, F)}, nhận {x.shape}"
+    print(f"[load_tensor_safe] Tensor x ready: {x.shape}, dtype={x.dtype}")
+
+    # 8) Tạo mask non-NaN
+    mask = ~np.isnan(x)
+    assert mask.shape == (T, N, F), "mask phải trùng shape với x"
+    print(f"[load_tensor_safe] Mask ready: {mask.shape}, dtype={mask.dtype}, n_valid={int(mask.sum())}")
+
+    # 9) Nếu strict, đảm bảo không có NaN
+    if strict:
+        n_nan = int(np.isnan(x).sum())
+        assert n_nan == 0, f"strict=True nhưng còn {n_nan} ô NaN trong dữ liệu"
+
+    # 10) times
+    times = piv.index.to_pydatetime()  # (T,)
+    print(f"[load_tensor_safe] Times ready: {len(times)} timestamps from {times[0]} to {times[-1]}")
+
+    return (x, times, symbols, feats, mask if return_mask else None)
+
+
+
 
 # ---------- Costs & helpers ----------
 
@@ -67,20 +168,25 @@ def apply_txn_costs(weight_prev: np.ndarray, weight_new: np.ndarray, fee_bps=7.5
 # ---------- Metrics ----------
 
 def perf_metrics(nav, dt_index=None) -> Dict[str, float]:
+
     nav = np.asarray(nav, dtype=np.float64)
     rets = np.diff(nav) / (nav[:-1] + 1e-12)
+
     if dt_index is None:
         ann = 525600.0  # minute bars per ~year
     else:
         dt = pd.to_datetime(dt_index)
         minutes = (dt[-1] - dt[0]).total_seconds() / 60.0
         ann = max(minutes, 1.0)
+
     mean = rets.mean()
     std  = rets.std(ddof=0) + 1e-12
     sharpe = mean / std * np.sqrt(ann)
     cagr = nav[-1] - 1.0
+
     dd = 1.0 - safe_div(nav, np.maximum.accumulate(nav))
     maxdd = float(dd.max())
+
     return {"CAGR≈": float(cagr), "Sharpe≈": float(sharpe), "MaxDD": maxdd}
 
 # ---------- Baselines ----------
@@ -207,8 +313,11 @@ def pair_meanrev_spread(close: np.ndarray, pair=(0,1), z_window=180, entry_z=1.5
 
 # ---------- Convenience ----------
 
-def run_all_baselines(split_parquet_path: str, fee_bps=7.5, slippage_bps=0.0,
-                      verbose: bool=True, progress_every: int=10000) -> Tuple[List[str], Dict[str, np.ndarray], Dict[str, Dict[str, float]]]:
+def run_all_baselines(
+        split_parquet_path: str, 
+        fee_bps=7.5, slippage_bps=0.0,
+        verbose: bool=True, progress_every: int=10000
+    ) -> Tuple[List[str], Dict[str, np.ndarray], Dict[str, Dict[str, float]]]:
     """
     Load Close tensor from split parquet, run a small family of baselines, and return:
         symbols, {name -> NAV curve}, {name -> metrics dict}
@@ -218,7 +327,7 @@ def run_all_baselines(split_parquet_path: str, fee_bps=7.5, slippage_bps=0.0,
         print(f"[run_all_baselines] fees: fee_bps={fee_bps}, slippage_bps={slippage_bps if 'slippage_bps' in locals() else 0.0}")
 
     print(">> loading data ...")
-    x, ts, syms, feats = load_tensor(split_parquet_path, cols=("Close",))
+    x, ts, syms, feats, masks = load_tensor_safe(split_parquet_path, features=("Close",))
     close = x[:, :, 0].astype(np.float64)
     print(">> data loaded: T,N,F =", x.shape)
 
@@ -226,14 +335,24 @@ def run_all_baselines(split_parquet_path: str, fee_bps=7.5, slippage_bps=0.0,
 
     if verbose: print(">> running EW_daily ...")
     out["EW_daily"] = ew_baseline(
-        close, fee_bps=fee_bps, rebalance_every=1440, slippage_bps=slippage_bps,
-        verbose=verbose, progress_every=progress_every
+        close, 
+        fee_bps=fee_bps, 
+        rebalance_every=1440, 
+        slippage_bps=slippage_bps,
+        verbose=verbose, 
+        progress_every=progress_every
     )
 
     if verbose: print(">> running MOM_top2_look360_rb60 ...")
     out["MOM_top2_look360_rb60"] = momentum_topk(
-        close, lookback=360, topk=2, fee_bps=fee_bps, rebalance_every=60, slippage_bps=slippage_bps,
-        verbose=verbose, progress_every=progress_every
+        close, 
+        lookback=360, 
+        topk=2, 
+        fee_bps=fee_bps, 
+        rebalance_every=60, 
+        slippage_bps=slippage_bps,
+        verbose=verbose, 
+        progress_every=progress_every
     )
 
     # Guard for symbol names (BTCUSDT & ETHUSDT may not exist in exotic bundles)
