@@ -191,8 +191,13 @@ def perf_metrics(nav, dt_index=None) -> Dict[str, float]:
 
 # ---------- Baselines ----------
 
-def ew_baseline(close: np.ndarray, fee_bps=7.5, rebalance_every=1440, slippage_bps=0.0,
-                verbose: bool=False, progress_every: int=10000) -> np.ndarray:
+def ew_baseline(
+        close: np.ndarray, 
+        fee_bps=7.5, 
+        rebalance_every=1440, # 1440 phút = 1 ngày nếu dữ liệu phút
+        slippage_bps=0.0,
+        verbose: bool=False, progress_every: int=10000
+    ) -> np.ndarray:
     """
     Equal-weight portfolio with periodic rebalance.
     """
