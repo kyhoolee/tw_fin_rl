@@ -38,7 +38,7 @@ Mình thấy bạn đã tóm lược ACE framework rất chặt chẽ, có đủ
    * Người đọc sẽ thấy ngay: equity path, turnover, fee drag, resample metrics.
 
 3. **Comparison Table (ACE vs Traditional)**
-
+ 
    * Một bảng nhỏ, ví dụ:
 
      | Aspect                 | Traditional Backtest  | ACE Framework        |

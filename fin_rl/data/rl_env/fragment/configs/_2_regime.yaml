@@ -1,0 +1,6 @@
+mode: regime
+params:
+  regime_map:
+    train: ["bull"]
+    test: ["bear"]
+    unseen: ["sideways"]
