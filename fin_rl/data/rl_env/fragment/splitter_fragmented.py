@@ -1,5 +1,7 @@
 from .base_splitter import BaseSplitter
-from .trading_dataset import TradingDataset
+from .trading_dataset import TradingDataset, TradingFragment
+import pandas as pd
+from typing import List
 
 class FragmentedSplitter(BaseSplitter):
     def __init__(self, assign: dict):
