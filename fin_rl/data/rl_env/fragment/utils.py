@@ -49,34 +49,31 @@ def inner_align(df: pd.DataFrame, symbols: List[str], ts_col: str = "open_time")
     return df[df[ts_col].isin(valid_ts)].copy()
 
 
-# fin_rl/data/rl_env/fragment/utils.py
-
-def load_aligned_dataset(
-        data_dir: str, candle_level: str, symbols: List[str],
-        fields = ["Open","High","Low","Close","Volume","QuoteVolume","Trades","TakerBuyBase","TakerBuyQuote"]
-    ) -> pd.DataFrame:
+def load_aligned_dataset(data_dir: str, candle_level: str, symbols: List[str], ts_col: str = "open_time") -> pd.DataFrame:
     """
-    Trả về wide frame: mỗi field x symbol là 1 cột, ví dụ: Open_BTCUSDT, High_BTCUSDT, ...
+    Load toàn bộ symbols → cắt intersection time → align timestamps.
+    Trả về DataFrame đã align đủ symbols.
     """
-    per = load_per_symbol(data_dir, candle_level, symbols)  # đã UTC + sort
+    # 1) Load per symbol
+    per = load_per_symbol(data_dir, candle_level, symbols)
 
-    # cắt theo khoảng giao nhau + inner align để mọi timestamp đều đủ symbols
-    inter_start, inter_end = calc_intersection_range(per, ts_col="open_time")
-    long = pd.concat(list(per.values()), ignore_index=True)
-    long = slice_time(long, inter_start, inter_end, "open_time")
-    long = inner_align(long, symbols, "open_time")
+    # 2) Intersection range
+    inter_start, inter_end = calc_intersection_range(per, ts_col)
 
-    # pivot: (time, symbol) -> fields
-    wide = (
-        long.pivot(index="open_time", columns="symbol", values=fields)
-            .sort_index()
-    )
-    # wide.columns là MultiIndex (field, symbol) -> flatten: f"{field}_{symbol}"
-    wide.columns = [f"{f}_{s}" for f, s in wide.columns.to_flat_index()]
-    wide = wide.reset_index()
+    # 3) Concatenate & slice
+    full = pd.concat(list(per.values()), ignore_index=True)
+    full = slice_time(full, inter_start, inter_end, ts_col)
 
-    # đảm bảo có đủ cột cho mọi (field,symbol) kể cả nếu NA (điền NaN giữ nguyên)
-    return wide
+    # 4) Inner align
+    before, after = len(full), None
+    full = inner_align(full, symbols, ts_col)
+    after = len(full)
+    print(f"[load_aligned_dataset] {before} -> {after} rows after align across {len(symbols)} symbols")
+
+    return full
+
+
+
 
 
 

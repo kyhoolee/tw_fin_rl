@@ -44,6 +44,7 @@ def log_step(step_id: int, name: str):
         return inner
     return wrap
 
+# ========================================================================
 
 def _build_aligned_wide(data_dir: str, candle_level: str, symbols: List[str]) -> pd.DataFrame:
     """
@@ -76,6 +77,12 @@ def _build_aligned_wide(data_dir: str, candle_level: str, symbols: List[str]) ->
     for sym in symbols:
         assert f"Close_{sym}" in out.columns, f"Missing Close_{sym}; dataset must be wide per-symbol"
     return out
+
+
+
+#==============================================================
+
+
 
 
 def make_monthly_fragments(df_wide: pd.DataFrame, symbols: List[str]) -> List[TradingFragment]:
