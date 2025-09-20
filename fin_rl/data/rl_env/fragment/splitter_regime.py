@@ -1,13 +1,24 @@
+# fin_rl/data/rl_env/fragment/splitter_regime.py
 import numpy as np
-from typing import Dict
+from typing import Dict, Sequence, Optional
 from .base_splitter import BaseSplitter
 from .trading_dataset import TradingDataset
 
-
 class FlexibleRegimeSplitter(BaseSplitter):
-    def __init__(self, regime_ratios: Dict, mode: str = "fraction",
-                 bull_thr=0.02, bear_thr=-0.02, side_thr=0.01,
-                 strategy="deterministic", seed=None, verbose=True):
+    def __init__(
+        self,
+        regime_ratios: Dict,
+        mode: str = "fraction",
+        bull_thr=0.02,
+        bear_thr=-0.02,
+        side_thr=0.01,
+        strategy="deterministic",
+        seed=None,
+        verbose=True,
+        # ==== mới: tổng quát hoá các field ====
+        price_field: str = "Close",
+        weight_field: Optional[str] = "QuoteVolume",
+    ):
         """
         regime_ratios: cấu hình số lượng/tỉ lệ fragment cho từng split
         mode: "fraction" (tỉ lệ) hoặc "count" (số lượng)
@@ -15,6 +26,8 @@ class FlexibleRegimeSplitter(BaseSplitter):
         bear_thr: return_weighted < ngưỡng => bear
         side_thr: |return_weighted| < ngưỡng => sideway
         strategy: ["deterministic", "random", "time_stratified"]
+        price_field: tên field giá để tính return (mặc định 'Close')
+        weight_field: tên field để làm trọng số (mặc định 'QuoteVolume'; None nếu không muốn weighting)
         """
         self.regime_ratios = regime_ratios
         self.mode = mode
@@ -24,19 +37,21 @@ class FlexibleRegimeSplitter(BaseSplitter):
         self.strategy = strategy
         self.seed = seed
         self.verbose = verbose
+        self.price_field = price_field
+        self.weight_field = weight_field
 
     def _label_fragments(self, dataset: TradingDataset):
         bull_ids, bear_ids, side_ids = [], [], []
 
-        # Fail-fast: dataset phải có cột per-symbol
         need_cols = []
         for sym in dataset.symbols:
-            need_cols += [f"Close_{sym}", f"QuoteVolume_{sym}"]
+            need_cols.append(f"{self.price_field}_{sym}")
+            if self.weight_field:
+                need_cols.append(f"{self.weight_field}_{sym}")
 
         for i, frag in enumerate(dataset.fragments):
             df = frag.df
 
-            # kiểm tra tối thiểu cho fragment này
             for col in need_cols:
                 if col not in df.columns:
                     raise KeyError(
@@ -49,17 +64,21 @@ class FlexibleRegimeSplitter(BaseSplitter):
 
             rets, weights = [], []
             for sym in dataset.symbols:
-                col_close = f"Close_{sym}"
-                col_qv    = f"QuoteVolume_{sym}"
-
-                start_p, end_p = df[col_close].iloc[0], df[col_close].iloc[-1]
+                pc = f"{self.price_field}_{sym}"
+                start_p, end_p = df[pc].iloc[0], df[pc].iloc[-1]
                 r = (end_p / start_p) - 1
-                w = float(df[col_qv].sum())
+
+                # trọng số (nếu có)
+                if self.weight_field:
+                    wc = f"{self.weight_field}_{sym}"
+                    w = float(df[wc].sum())
+                else:
+                    w = 1.0
 
                 returns_per_symbol[sym] = {
                     "first": float(start_p),
                     "last": float(end_p),
-                    "return": float(r)
+                    "return": float(r),
                 }
                 weights_per_symbol[sym] = float(w)
 
@@ -73,7 +92,7 @@ class FlexibleRegimeSplitter(BaseSplitter):
             frag.meta["weights_per_symbol"] = weights_per_symbol
             frag.meta["return_weighted"] = weighted_return
 
-            # regime classification by weighted return
+            # regime theo weighted return
             if weighted_return > self.bull_thr:
                 frag.meta["regime"] = "bull"
                 bull_ids.append(i)
@@ -88,14 +107,18 @@ class FlexibleRegimeSplitter(BaseSplitter):
                 side_ids.append(i)
 
             if self.verbose:
-                print(f"[Label] Frag {i} ({frag.start.date()}→{frag.end.date()}): "
-                      f"weighted_return={weighted_return:.2%}, regime={frag.meta['regime']}")
+                print(
+                    f"[Label] Frag {i} ({frag.start.date()}→{frag.end.date()}): "
+                    f"weighted_return={weighted_return:.2%}, regime={frag.meta['regime']}"
+                )
                 print(f"    df cols = {list(df.columns)[:10]}{' ...' if len(df.columns)>10 else ''}")
                 print(f"    meta keys = {list(frag.meta.keys())}")
                 for sym, info in returns_per_symbol.items():
                     w = weights_per_symbol[sym]
-                    print(f"        {sym}: first={info['first']:.4f}, last={info['last']:.4f}, "
-                          f"return={info['return']:.2%}, weight={w:.2e}")
+                    print(
+                        f"        {sym}: first={info['first']:.4f}, last={info['last']:.4f}, "
+                        f"return={info['return']:.2%}, weight={w:.2e}"
+                    )
 
         if self.verbose:
             print(f"[Summary] bull={len(bull_ids)}, bear={len(bear_ids)}, side={len(side_ids)}")
@@ -116,10 +139,12 @@ class FlexibleRegimeSplitter(BaseSplitter):
         else:
             raise ValueError(f"Unknown strategy={self.strategy}")
 
-    def split(self, dataset: TradingDataset):
+    def split(
+            self, 
+            dataset: TradingDataset
+        ) -> Dict[str, TradingDataset]:
         regime_ids = self._label_fragments(dataset)
         out = {}
-
         pools = {reg: list(ids) for reg, ids in regime_ids.items()}
 
         for split_name, ratios in self.regime_ratios.items():
@@ -148,7 +173,8 @@ class FlexibleRegimeSplitter(BaseSplitter):
                 name=f"{dataset.name}_{split_name}",
                 fragments=frags,
                 symbols=dataset.symbols,
-                candle_level=dataset.candle_level
+                candle_level=dataset.candle_level,
+                meta=dataset.meta.copy(),
             )
 
             if self.verbose:
@@ -157,5 +183,4 @@ class FlexibleRegimeSplitter(BaseSplitter):
                     frag = dataset.fragments[i]
                     print(f"    Frag {i}: regime={frag.meta['regime']}, "
                           f"weighted_return={frag.meta['return_weighted']:.2%}")
-                    # có thể in thêm per-symbol nếu muốn
         return out
