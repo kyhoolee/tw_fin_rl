@@ -28,23 +28,33 @@ class FlexibleRegimeSplitter(BaseSplitter):
     def _label_fragments(self, dataset: TradingDataset):
         bull_ids, bear_ids, side_ids = [], [], []
 
+        # Fail-fast: dataset phải có cột per-symbol
+        need_cols = []
+        for sym in dataset.symbols:
+            need_cols += [f"Close_{sym}", f"QuoteVolume_{sym}"]
+
         for i, frag in enumerate(dataset.fragments):
             df = frag.df
+
+            # kiểm tra tối thiểu cho fragment này
+            for col in need_cols:
+                if col not in df.columns:
+                    raise KeyError(
+                        f"[FlexibleRegimeSplitter] Fragment {i} missing required column '{col}'. "
+                        f"Ensure dataset is WIDE with per-symbol columns."
+                    )
 
             returns_per_symbol = {}
             weights_per_symbol = {}
 
             rets, weights = [], []
             for sym in dataset.symbols:
-                col_close = f"Close_{sym}" if f"Close_{sym}" in df.columns else "Close"
-                col_qv = f"QuoteVolume_{sym}" if f"QuoteVolume_{sym}" in df.columns else "QuoteVolume"
-
-                if col_close not in df or col_qv not in df:
-                    continue
+                col_close = f"Close_{sym}"
+                col_qv    = f"QuoteVolume_{sym}"
 
                 start_p, end_p = df[col_close].iloc[0], df[col_close].iloc[-1]
                 r = (end_p / start_p) - 1
-                w = df[col_qv].sum()
+                w = float(df[col_qv].sum())
 
                 returns_per_symbol[sym] = {
                     "first": float(start_p),
@@ -57,7 +67,7 @@ class FlexibleRegimeSplitter(BaseSplitter):
                     rets.append(r * w)
                     weights.append(w)
 
-            weighted_return = sum(rets) / sum(weights) if weights else 0.0
+            weighted_return = (sum(rets) / sum(weights)) if weights else 0.0
 
             frag.meta["returns_per_symbol"] = returns_per_symbol
             frag.meta["weights_per_symbol"] = weights_per_symbol
@@ -147,9 +157,5 @@ class FlexibleRegimeSplitter(BaseSplitter):
                     frag = dataset.fragments[i]
                     print(f"    Frag {i}: regime={frag.meta['regime']}, "
                           f"weighted_return={frag.meta['return_weighted']:.2%}")
-                    for sym, info in frag.meta["returns_per_symbol"].items():
-                        w = frag.meta["weights_per_symbol"][sym]
-                        print(f"        {sym}: first={info['first']:.4f}, last={info['last']:.4f}, "
-                              f"return={info['return']:.2%}, weight={w:.2e}")
-
+                    # có thể in thêm per-symbol nếu muốn
         return out

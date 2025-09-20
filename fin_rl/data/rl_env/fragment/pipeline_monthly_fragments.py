@@ -3,18 +3,29 @@
 
 """
 Pipeline: load -> fragment by month -> datasets -> regime splits
+
+Bản vá:
+- Xây dựng dataframe "WIDE" theo chiều symbol bằng cách gọi
+  load_aligned_dataset(..., symbols=[sym]) cho từng symbol rồi merge on open_time.
+- Mỗi feature gắn hậu tố _{SYMBOL} (Close_BTCUSDT, QuoteVolume_ETHUSDT, ...).
+- Cắt monthly fragments theo chiều thời gian; mỗi fragment chứa đủ chuỗi giá cho tất cả symbol.
 """
 
 import pandas as pd
 from pathlib import Path
-from typing import List
+from typing import List, Dict
 import time
 import numpy as np
 
-from fin_rl.data.rl_env.fragment.trading_dataset import TradingDataset, TradingFragment
-from fin_rl.data.rl_env.fragment.utils import load_aligned_dataset
-from fin_rl.data.rl_env.fragment.splitter_fragmented import FragmentedSplitter
-from fin_rl.data.rl_env.fragment.splitter_regime import FlexibleRegimeSplitter
+from .trading_dataset import TradingDataset, TradingFragment
+from .utils import load_aligned_dataset  # dùng lại hàm có sẵn
+from .splitter_fragmented import FragmentedSplitter
+from .splitter_regime import FlexibleRegimeSplitter
+
+BASE_COLS = [
+    "Open", "High", "Low", "Close", "Volume",
+    "QuoteVolume", "Trades", "TakerBuyBase", "TakerBuyQuote"
+]
 
 
 def log(msg: str):
@@ -34,20 +45,45 @@ def log_step(step_id: int, name: str):
     return wrap
 
 
-def make_monthly_fragments(df: pd.DataFrame, symbol: str) -> List[TradingFragment]:
-    # print df meta for debug
-    print(f"DataFrame for symbol {symbol}:")
-    print(f"  Rows: {len(df)}")
-    print(f"  Date range: {df['open_time'].min()} to {df['open_time'].max()}")
-    print(f"  Columns: {df.columns.tolist()}")
-    # print head and tail
-    print("  Head:")
-    print(df.head(3))
-    print("  Tail:")
-    print(df.tail(3))
+def _build_aligned_wide(data_dir: str, candle_level: str, symbols: List[str]) -> pd.DataFrame:
+    """
+    Tạo DataFrame WIDE:
+      - Một cột thời gian chung: open_time
+      - Các cột feature gắn hậu tố theo symbol: {FEAT}_{SYMBOL}
+    Cách làm an toàn: gọi load_aligned_dataset cho từng symbol riêng rồi merge inner theo open_time.
+    Điều này né được lỗi "mọi symbol dùng chung 1 cột" đã thấy trong log hiện tại. :contentReference[oaicite:2]{index=2}
+    """
+    def _one(sym: str) -> pd.DataFrame:
+        # load cho đúng 1 symbol để tránh "gộp phẳng" mất chiều symbol
+        df = load_aligned_dataset(data_dir, candle_level, [sym])
+        # yêu cầu open_time + các cột chuẩn
+        assert "open_time" in df.columns, f"missing open_time for {sym}"
+        # chỉ giữ open_time + các cột tồn tại trong BASE_COLS
+        keep = ["open_time"] + [c for c in BASE_COLS if c in df.columns]
+        df = df[keep].sort_values("open_time").drop_duplicates(subset=["open_time"])
+        # gắn hậu tố
+        rename = {c: f"{c}_{sym}" for c in df.columns if c != "open_time"}
+        df = df.rename(columns=rename)
+        return df
 
-    frags = []
-    grouped = df.groupby(df["open_time"].dt.to_period("M"))
+    dfs = [_one(sym) for sym in symbols]
+    out = dfs[0]
+    for i in range(1, len(dfs)):
+        out = out.merge(dfs[i], on="open_time", how="inner")
+
+    out = out.sort_values("open_time").reset_index(drop=True)
+    # sanity: yêu cầu Close_{sym} tồn tại
+    for sym in symbols:
+        assert f"Close_{sym}" in out.columns, f"Missing Close_{sym}; dataset must be wide per-symbol"
+    return out
+
+
+def make_monthly_fragments(df_wide: pd.DataFrame, symbols: List[str]) -> List[TradingFragment]:
+    """
+    Cắt theo tháng trên dataframe WIDE (đã có các cột _{SYMBOL}).
+    """
+    frags: List[TradingFragment] = []
+    grouped = df_wide.groupby(df_wide["open_time"].dt.to_period("M"))
     for _, sub in grouped:
         if sub.empty:
             continue
@@ -56,27 +92,18 @@ def make_monthly_fragments(df: pd.DataFrame, symbol: str) -> List[TradingFragmen
             df=sub,
             start=sub["open_time"].iloc[0],
             end=sub["open_time"].iloc[-1],
-            meta={"symbol": symbol}
+            meta={"symbols": symbols}
         ))
     return frags
 
 
-@log_step(1, "Build monthly dataset (aligned + fragments)")
+@log_step(1, "Build monthly dataset (wide aligned + fragments)")
 def build_datasets(data_dir: str, candle_level: str, symbols: List[str]) -> TradingDataset:
-    full = load_aligned_dataset(data_dir, candle_level, symbols)
+    # 1) Xây dataframe dạng WIDE đúng chuẩn chiều symbol
+    full_wide = _build_aligned_wide(data_dir, candle_level, symbols)
 
-    all_frags = []
-    grouped = full.groupby(full["open_time"].dt.to_period("M"))
-    for _, sub in grouped:
-        if sub.empty:
-            continue
-        sub = sub.sort_values("open_time")
-        all_frags.append(TradingFragment(
-            df=sub,
-            start=sub["open_time"].iloc[0],
-            end=sub["open_time"].iloc[-1],
-            meta={"symbols": symbols}
-        ))
+    # 2) Cắt monthly fragments
+    all_frags = make_monthly_fragments(full_wide, symbols)
 
     log(f"Generated {len(all_frags)} monthly fragments")
     n_rows = sum(len(f.df) for f in all_frags)
@@ -101,6 +128,7 @@ def example_fragmented_split(dataset: TradingDataset):
     splitter = FragmentedSplitter(assign)
     return splitter.split(dataset)
 
+
 @log_step(3, "Flexible regime split with thresholds")
 def example_flexible_split(dataset: TradingDataset):
     regime_ratios = {
@@ -118,14 +146,13 @@ def example_flexible_split(dataset: TradingDataset):
     )
     splits = splitter.split(dataset)
 
-    # In thêm summary (dùng weighted return trong meta)
+    # summary nhỏ theo weighted return trong meta
     for name, ds in splits.items():
         rets = [f.meta.get("return_weighted", 0.0) for f in ds.fragments]
         if rets:
             print(f"[{name}] n_frag={len(ds.fragments)}, "
                   f"mean_return={np.mean(rets):.2%}, "
                   f"min={np.min(rets):.2%}, max={np.max(rets):.2%}")
-            # In thêm head/tail meta để check
             for frag in (ds.fragments[:2] + ds.fragments[-2:]):
                 print(f"    Frag {frag.start.date()}–{frag.end.date()}, "
                       f"regime={frag.meta.get('regime')}, "
