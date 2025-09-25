@@ -79,7 +79,7 @@ dmypy.json
 # Data files
 work
 notebook/exp/_out
-
+**/_out
 
 *.csv
 *.csv.gz
