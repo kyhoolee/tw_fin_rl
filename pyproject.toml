@@ -21,7 +21,7 @@ dev = ["jupyter", "pytest", "black", "ruff"]
 
 [tool.setuptools.packages.find]
 # Tự tìm các package dạng fin_rl, fin_rl.*
-include = ["fin_rl*"]
+include = ["fin_rl*", "ace_rl*"]
 exclude = ["tests*", "docs*", "examples*"]
 
 [tool.setuptools]
