@@ -14,6 +14,7 @@ Ghi chú:
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Sequence, Literal
@@ -68,6 +69,7 @@ class CubeBuilderConfig:
     consolidate_metadata: bool = True
     use_dask: bool = False
     calendar_mode: Literal["range_intersection", "union", "exact_intersection"] = "range_intersection"
+    debug_timing: bool = False
 
     def iter_symbols(self) -> Iterable[str]:
         """Liệt kê symbol: ưu tiên danh sách cung cấp; nếu không, quét *.zarr."""
@@ -239,29 +241,56 @@ def build_raw_cube(config: CubeBuilderConfig) -> xr.Dataset:
     if not symbols:
         raise ValueError(f"No symbols discovered under {config.per_symbol_root}")
 
-    slices = [
-        SymbolZarrSlice.from_store(
+    def _log(message: str) -> None:
+        if config.debug_timing:
+            print(f"[CubeBuilder] {message}", flush=True)
+
+    start_total = time.perf_counter()
+    _log(f"start build for {len(symbols)} symbols (use_dask={config.use_dask})")
+
+    slices: list[SymbolZarrSlice] = []
+    for symbol in symbols:
+        t0 = time.perf_counter()
+        sl = SymbolZarrSlice.from_store(
             symbol=symbol,
             store_path=Path(config.per_symbol_root) / f"{symbol}.zarr",
             dtype=config.dtype,
             use_dask=config.use_dask,
         )
-        for symbol in symbols
-    ]
+        slices.append(sl)
+        elapsed = time.perf_counter() - t0
+        _log(
+            f"loaded {symbol} ({sl.values.shape if hasattr(sl.values, 'shape') else 'unknown shape'}) in {elapsed:.2f}s"
+        )
 
     # [STEP 2] Chuẩn hoá calendar & feature order
+    t0 = time.perf_counter()
     calendar = _resolve_calendar(config.calendar_path, slices, config.calendar_mode)
     if calendar.size == 0:
         raise ValueError("Resolved calendar is empty. Hãy kiểm tra calendar_mode hoặc dữ liệu đầu vào.")
     feature_order = _resolve_feature_order(config.feature_order_path, slices)
+    elapsed = time.perf_counter() - t0
+    _log(
+        f"resolved calendar ({calendar.size} entries) and feature order ({len(feature_order)} features) in {elapsed:.2f}s"
+    )
 
     # [STEP 3] Reindex từng symbol -> concat -> tạo dataset
-    data_arrays = [sl.to_xarray(calendar, feature_order, dtype=config.dtype) for sl in slices]
+    data_arrays: list[xr.DataArray] = []
+    for sl in slices:
+        t0 = time.perf_counter()
+        da = sl.to_xarray(calendar, feature_order, dtype=config.dtype)
+        data_arrays.append(da)
+        elapsed = time.perf_counter() - t0
+        _log(f"reindexed {sl.symbol} -> {da.shape} in {elapsed:.2f}s")
+
+    t0 = time.perf_counter()
     values = xr.concat(data_arrays, dim="symbol").transpose("time", "symbol", "feature")
+    _log(f"concatenated values -> {values.shape} in {time.perf_counter() - t0:.2f}s")
 
     data_vars = {"values": values}
 
     if config.compute_mask:
+        t0 = time.perf_counter()
         # mask = True nếu giá trị hữu hạn (không NaN, không inf)
         mask = xr.apply_ufunc(
             np.isfinite,
@@ -270,13 +299,16 @@ def build_raw_cube(config: CubeBuilderConfig) -> xr.Dataset:
             keep_attrs=False,
         )
         data_vars["mask"] = mask
+        _log(f"generated mask in {time.perf_counter() - t0:.2f}s")
 
     cube = xr.Dataset(data_vars)
 
     # Chunk theo cấu hình (tối ưu đọc/ghi và training)
     chunk_map = config.chunk_dict()
     if chunk_map:
+        t0 = time.perf_counter()
         cube = cube.chunk(chunk_map)
+        _log(f"applied chunking {chunk_map} in {time.perf_counter() - t0:.2f}s")
 
     # Ghi nguồn meta để trace về sau
     cube.attrs["calendar_source"] = str(config.calendar_path) if config.calendar_path else f"inferred:{config.calendar_mode}"
@@ -286,11 +318,15 @@ def build_raw_cube(config: CubeBuilderConfig) -> xr.Dataset:
     if config.output_path:
         target = config.output_path
         target.parent.mkdir(parents=True, exist_ok=True)
+        t0 = time.perf_counter()
         cube.to_zarr(
             target.as_posix(),
             mode="w",
             consolidated=config.consolidate_metadata,
         )
+        _log(f"wrote cube to {target} in {time.perf_counter() - t0:.2f}s")
+
+    _log(f"total build_raw_cube elapsed {time.perf_counter() - start_total:.2f}s")
 
     return cube
 
