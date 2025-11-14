@@ -1,0 +1,5 @@
+## gitignore for simplest_ml module
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+data/               
