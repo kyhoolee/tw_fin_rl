@@ -137,6 +137,130 @@ Implication:
 - Volatility-scaled barriers (e.g., 1.5σ TP, 1.0σ SL, timeout H=12).
 - Convert probabilities to trades with fees; report Sharpe/CAGR/DD.
 
+## Immediate Action Plan (v2 follow-ups)
+
+- Proper OOS Backtest (no refit bias)
+  - Use out-of-fold probabilities to construct an aggregate OOS PnL series per token.
+  - Report token-level and pooled OOS: CAGR, Sharpe, maxDD, hit-rate, turnover.
+  - Save OOS equity curves (CSV) under `simplest_ml/w1/_exp/` for inspection.
+
+- Threshold Tuning per Token
+  - On validation folds, tune upper/lower thresholds (t_long, t_short) by maximizing F1(±1) or Youden J.
+  - Lock tuned thresholds and apply to OOS proba; log chosen values.
+
+- Multiclass Macro AUC
+  - Compute final macro AUC (one-vs-rest, OVR) using full probability matrices.
+  - Include macro AUC in the summary PrettyTable and per-token JSON.
+
+- Sensitivity Sweeps
+  - Thresholds: t_long/t_short ∈ {0.55, 0.60, 0.65}; Fees: {4, 6, 10} bps; Min-hold: {1, 4} bars.
+  - Emit a compact grid summary (CSV) for each token with metrics; highlight robust regions.
+
+- Run Logging & Reproducibility
+  - Persist run config (tokens, label H/ε, feature flags, thresholds, fees, splits) to JSON with a timestamp.
+  - Save per-token metrics and tuned thresholds to CSV; include fold-level metrics for diagnostics.
+  - Record library versions and random seeds.
+
+- Optional Baselines
+  - Add LightGBM classifier (shallow, early stopping) and report identical OOS/backtest metrics.
+  - Compare to multinomial logistic; optionally add probability calibration.
+
+## Visualization (Charts)
+
+What to plot and why, plus quick code snippets.
+
+- Equity Curve (PnL)
+  - Plot cumulative equity: `eq = (1 + pnl).cumprod()`; baseline at `y=1.0`.
+  - Per token, and an average/pooled curve.
+  - Save: `_exp/{run_id}/{token}_equity.png`.
+
+- Drawdown
+  - `dd = eq / eq.cummax() - 1`; plot alongside equity or as a separate panel.
+  - Useful to see tail risk and regime sensitivity.
+
+- Rolling Sharpe / Volatility
+  - 30D or 7D windows (in hours): `roll = pnl.rolling(24*30).apply(lambda x: x.mean()/(x.std(ddof=0)+1e-12)*np.sqrt(8760))`.
+
+- Threshold Sensitivity
+  - For grids of `t_long/t_short`, plot metric vs threshold (ACC/F1/Sharpe) to find robust ranges.
+
+- Probability Diagnostics
+  - Histograms of `P(up)`, `P(down)`; reliability (calibration) plot for the up-class (OVR bins).
+  - Confusion matrix heatmap (normalized) to see class mix and flat-class filtering.
+
+- Cross-Token Comparison
+  - Bar charts for CAGR/Sharpe/HitRate; heatmaps for metrics across tokens and fees.
+
+Minimal example (matplotlib)
+
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_equity_and_drawdown(pnl, title="", save_path=None):
+    pnl = pnl.fillna(0)
+    eq = (1 + pnl).cumprod()
+    dd = eq / eq.cummax() - 1
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10,6), sharex=True,
+                                   gridspec_kw={"height_ratios": [3, 1]})
+
+    ax1.plot(eq.index, eq.values, label="Equity")
+    ax1.axhline(1.0, color="gray", lw=1, ls="--")
+    ax1.set_ylabel("Equity (x)")
+    ax1.set_title(title or "Equity & Drawdown")
+    ax1.legend(loc="best")
+
+    ax2.fill_between(dd.index, dd.values, 0, color="tab:red", alpha=0.4)
+    ax2.set_ylabel("Drawdown")
+    ax2.set_xlabel("Time")
+
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150)
+    plt.show()
+```
+
+Usage: after `backtest_from_proba(...)` returns `pnl`, call
+
+```python
+plot_equity_and_drawdown(pnl, title=f"{token} strategy", save_path=f"_exp/{run_id}/{token}_equity.png")
+```
+
+Note: use a timestamped `run_id` to group plots and CSVs for each run.
+
+## Fees: With vs Without
+
+Measure both gross (no fees) and net (with fees) performance. Use Binance spot fee tiers as reference scenarios:
+
+- No-fee (gross): fee_bps = 0.0 (upper bound on strategy edge)
+- VIP 4: fee_bps = 5.4 bps (0.054%)
+- VIP 9: fee_bps = 2.0 bps (0.02%)
+
+Implementation notes
+
+- Per our backtest, fees are applied on position changes: `fee = fee_bps/1e4 * |Δposition|` per bar.
+- Report both gross and net metrics:
+  - Gross PnL: set `fee_bps=0.0`
+  - Net PnL: set `fee_bps` to 5.4 or 2.0 bps and recompute.
+- Include fees in sensitivity sweeps and the summary table (add columns or separate rows).
+
+Example (v2 backtest)
+
+```python
+# Gross
+pnl_gross, stats_gross = backtest_from_proba(xdf, proba, pred, classes, t_long=0.60, t_short=0.60, fee_bps=0.0)
+# VIP 4
+pnl_vip4,  stats_vip4  = backtest_from_proba(xdf, proba, pred, classes, t_long=0.60, t_short=0.60, fee_bps=5.4)
+# VIP 9
+pnl_vip9,  stats_vip9  = backtest_from_proba(xdf, proba, pred, classes, t_long=0.60, t_short=0.60, fee_bps=2.0)
+```
+
+Recommended reporting
+
+- Add a small fee table per token: CAGR/Sharpe/HitRate under (0.0, 2.0, 5.4) bps.
+- Plot three equity curves on the same chart for a quick visual of fee impact.
+
 ## Open Questions
 
 - Which horizons to target first (H=4, 12)?
