@@ -246,6 +246,7 @@ def prepare_Xy(
     label_h: int = 4,
     label_eps: float = 0.001,
     feature_kwargs: Optional[dict] = None,
+    extra_hourly_df: Optional[pd.DataFrame] = None,
 ) -> Tuple[np.ndarray, np.ndarray, List[str], pd.DataFrame]:
     """Feature/label preparation with leakage‑safe transforms.
 
@@ -266,6 +267,19 @@ def prepare_Xy(
         log_prefix=log_prefix,
         **feature_kwargs,
     )
+    # Join extra precomputed hourly features (e.g., minute->hour aggregates)
+    if extra_hourly_df is not None and not extra_hourly_df.empty:
+        try:
+            ex = extra_hourly_df.reindex(x.index)
+            ex = ex.shift(1)  # safety lag
+            ex.columns = [f"mf_{c}" for c in ex.columns]
+            x = pd.concat([x, ex], axis=1)
+            feature_cols += list(ex.columns)
+            if verbose:
+                print(f"{log_prefix}prepare_Xy: added minute features: {ex.shape}")
+        except Exception as e:
+            if verbose:
+                print(f"{log_prefix}prepare_Xy: minute feature join failed: {e}")
     y = make_label_three_class(x, H=label_h, eps=label_eps, verbose=verbose, log_prefix=log_prefix)
     before_drop = len(x)
     x = x.dropna().copy()
@@ -598,6 +612,13 @@ def run_per_token_pipeline(
     label_h: int = 4,
     label_eps: float = 0.001,
     feature_kwargs: Optional[dict] = None,
+    # minute feature integration
+    include_minute: bool = False,
+    minute_feature_set_id: Optional[str] = None,
+    minute_derived_dir: str = "data/derived",
+    minute_auto_build: bool = False,
+    minute_params: Optional[dict] = None,
+    minute_dir: str = "data/minute",
     tune_grid: Sequence[float] = (0.55, 0.60, 0.65),
     # artifacts
     save_plots: bool = True,
@@ -640,6 +661,41 @@ def run_per_token_pipeline(
 
         if verbose:
             print(f"{prefix}FEATURES+LABEL: windows={tuple(windows)} H={label_h} eps={label_eps}")
+        # optional minute->hour features
+        extra_df = None
+        if include_minute:
+            try:
+                from features_minute import (
+                    default_params as _min_default_params,
+                    make_feature_set_id as _min_make_fid,
+                    build_hour_from_minute as _min_build,
+                    get_hour_features as _min_get,
+                )
+                if minute_feature_set_id is None:
+                    p = minute_params or _min_default_params()
+                    minute_feature_set_id = _min_make_fid(p)
+                if minute_auto_build:
+                    _min_build(
+                        symbol=symbol,
+                        start=start,
+                        end=end,
+                        params=minute_params or _min_default_params(),
+                        minute_dir=minute_dir,
+                        derived_dir=minute_derived_dir,
+                        overwrite=False,
+                        verbose=verbose,
+                    )
+                extra_df = _min_get(
+                    symbol=symbol,
+                    start=start,
+                    end=end,
+                    feature_set_id=minute_feature_set_id,
+                    derived_dir=minute_derived_dir,
+                )
+                if verbose:
+                    print(f"{prefix}MINUTE FEATS: {extra_df.shape} from {minute_feature_set_id}")
+            except Exception as e:
+                print(f"{prefix}Minute feature load failed: {e}")
         X, y, feature_cols, xdf = prepare_Xy(
             df,
             windows=windows,
@@ -648,6 +704,7 @@ def run_per_token_pipeline(
             label_h=label_h,
             label_eps=label_eps,
             feature_kwargs=feature_kwargs,
+            extra_hourly_df=extra_df,
         )
         if len(xdf) < 300:
             print(f"{prefix}Too few rows after feature prep: {len(xdf)} (skip)")
